@@ -21,7 +21,7 @@ class DatabaseTestCase(unittest.TestCase):
         if url.get_backend_name() != "postgresql" or url.database != "taxdome_test_task_test":
             raise RuntimeError("Tests may reset only the taxdome_test_task_test PostgreSQL database")
 
-        self.engine = create_engine(url)
+        self.engine = create_engine(url, echo=True)
         self.addCleanup(self.engine.dispose)
         root = Path(__file__).resolve().parents[1]
         self.config = Config(str(root / "alembic.ini"))
@@ -35,4 +35,6 @@ class DatabaseTestCase(unittest.TestCase):
         self.config.attributes.pop("connection")
 
         # The real app uses the dedicated test database during this test only.
-        self.enterContext(patch.dict(os.environ, {"DATABASE_URL": database_url}))
+        self.enterContext(
+            patch.dict(os.environ, {"DATABASE_URL": database_url, "SQL_ECHO": "true"})
+        )

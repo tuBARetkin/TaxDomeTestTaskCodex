@@ -1,1 +1,1 @@
-"""Database access layer (to be implemented)."""
+"""Database access layer."""

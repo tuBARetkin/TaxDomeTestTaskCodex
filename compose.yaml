@@ -3,6 +3,7 @@ services:
     build: .
     environment:
       DATABASE_URL: postgresql+psycopg://taxdome:taxdome@db:5432/taxdome_test_task
+      SQL_ECHO: "false"
     ports:
       - "127.0.0.1:${APP_PORT:-8000}:8000"
     depends_on:

@@ -1,1 +1,1 @@
-"""Business logic layer (to be implemented)."""
+"""Business logic and transaction orchestration."""

@@ -12,7 +12,11 @@ from api.payments import router as payments_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    app.state.engine = create_engine(os.environ["DATABASE_URL"], pool_pre_ping=True)
+    app.state.engine = create_engine(
+        os.environ["DATABASE_URL"],
+        pool_pre_ping=True,
+        echo=os.environ.get("SQL_ECHO", "false").lower() == "true",
+    )
     try:
         yield
     finally:

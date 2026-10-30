@@ -20,14 +20,15 @@ places. Database amounts and balances are stored as integer US cents.
 
 ## Current status
 
-This commit is the initial application draft, not the completed assignment.
+This is an application draft, not a verified submission.
 It contains the layered project structure, request validation, SQLAlchemy models,
 Alembic migrations, and Docker Compose configuration.
 
-The payment endpoint currently returns `501 Not Implemented` for a valid request.
-The service and repository layers are placeholders; balance validation and
-payment processing are still to be implemented. Tests and end-to-end checks of
-this draft are deferred.
+The payment endpoint is connected to a payment service and a plain-SQL repository.
+The service converts amounts and owns the transaction. The repository updates
+firm balances in ascending ID order, then inserts payment records. The $100
+Pinecrest-to-Lopez API test passes against the isolated PostgreSQL database in
+Docker. The remaining tests and concurrency checks are still deferred.
 
 ## Stack
 
@@ -115,17 +116,85 @@ the seed rows.
 }
 ```
 
-The endpoint currently validates the request body only:
+Request validation:
 
 - `payer_firm_uuid` and each `payee_firm_uuid` must be valid UUIDs.
 - `payments` must contain at least one entry.
 - `amount` must be a positive string with zero, one, or two decimal places.
 - Each payment requires a string `description`.
 
-Invalid input returns `422`. Valid input returns `501 Not Implemented` with
-`{"detail": "Payment processing is not implemented yet"}`. The endpoint does not
-query firms, create payments, or update balances. Service and database processing
-will be added later. This draft has not been checked yet.
+The service converts dollar strings to integer cents without floating-point
+arithmetic. Invalid input or an amount exceeding the INTEGER range returns `422`.
+`PaymentRepository.bulk_update()` in `src/repositories/payments.py` receives the
+payer UUID, payment entries with integer cents, and an open SQLAlchemy Core
+connection. All statements use that connection and bound parameters.
+
+The repository looks up firm IDs without reading balances, aggregates balance
+deltas, and executes one `UPDATE` per affected firm in ascending ID order. Each
+update uses `balance_cents + delta_cents`: a negative delta debits the payer and
+positive deltas credit payees. The payer update requires the current balance to
+cover the entire batch, preventing the debit from taking it below zero. Payees
+receive positive credits. Repeated payees share one balance update but retain
+separate payment records.
+
+Payment records are sorted by payee firm ID and inserted only after every firm
+update succeeds. If any update affects no row, the batch is denied and all earlier
+updates are rolled back. The lookup, individual updates, and batch insert are
+separate SQL executions within the same transaction.
+
+The repository completes normally on success and raises `PaymentRejected` on
+denial, carrying an error code and message. The exception leaves the transaction
+scope, rolling back all changes before the controller returns `422`. Success
+returns `201` with an empty body. For example:
+
+```json
+{
+  "detail": {
+    "code": "payer_update_rejected",
+    "message": "Payer has insufficient funds or no longer exists"
+  }
+}
+```
+
+Other rejection codes include `empty_batch`, `batch_too_large`, `invalid_amount`,
+`batch_amount_too_large`, `payer_not_found`, and `payee_not_found`. Request-schema
+validation errors retain FastAPI's standard `422` response format.
+
+Transaction isolation is explicitly set before beginning the transaction in
+`src/db/transaction.py`; change `PAYMENT_ISOLATION_LEVEL` there. The current
+setting is `READ COMMITTED`. There is no `SELECT FOR UPDATE`; the ordered updates
+take PostgreSQL's normal row locks. The ordering avoids reverse-order locking
+between batches following this path, but is not a guarantee against deadlocks
+involving other write paths. Concurrent-request behavior has not been tested yet.
+
+## Known limitations
+
+- **Maximum 1,000 payments per batch.** `PaymentRepository.bulk_update()` rejects
+  larger batches before iterating over payments or executing SQL. The controller
+  translates this denial into HTTP `422`; no payments or balance changes are
+  saved. The limit is defined by `MAX_PAYMENTS_PER_BATCH` in
+  `src/repositories/payments.py`.
+- **In-memory processing.** The request, service inputs, and insert records are
+  held in memory. Aggregation visits every payment, and records are sorted before
+  insertion. This implementation is intended for bounded batches, not millions
+  of payments in one request. The repository limit does not limit HTTP body
+  bytes or prevent earlier JSON parsing and service-side allocations; a request
+  body size limit and streamed ingestion are not implemented.
+- **32-bit INTEGER columns.** IDs, balances, and payment amounts use PostgreSQL
+  `INTEGER`, whose range is `-2147483648` to `2147483647`. For money stored in
+  cents, the maximum positive value is **$21,474,836.47**. Individual payments
+  above this amount are rejected with `422`.
+- **Batch totals.** Each payment can fit within INTEGER while their sum exceeds
+  its maximum. Python's integer sum does not overflow, but the repository
+  explicitly rejects totals above `2147483647` cents with `422`: a single firm's
+  INTEGER balance cannot cover a larger batch.
+- **Crediting a balance can overflow.** An individually valid payment and batch
+  total do not guarantee that the recipient's existing balance plus its total
+  credits fits INTEGER. For example, adding one cent to a balance of
+  `2147483647` cents exceeds the limit. The SQL uses direct integer arithmetic,
+  so this can raise a database overflow error. The error rolls back the whole transaction, but is not
+  currently translated into `422` and can result in HTTP `500`. No wider-type
+  casts or schema changes are implemented for this case.
 
 ## Migrations
 
@@ -153,8 +222,8 @@ uvicorn api.main:app --reload
 ```text
 src/
   api/           FastAPI entry point, routes, and request schemas
-  services/      Business logic (placeholder)
-  repositories/  Database access (placeholder)
+  services/      Payment validation and transaction orchestration
+  repositories/  Ordered balance updates and payment inserts in plain SQL
   db/            SQLAlchemy models and database infrastructure
 test/            Database integration tests
 migrations/      Alembic database migrations
@@ -164,8 +233,20 @@ pyproject.toml   Package metadata and build configuration
 
 ## Tests
 
+SQL logging is enabled by the test fixture for database setup, migrations, API
+queries, and test assertions. SQLAlchemy prints statements, bound parameters,
+and transaction boundaries to the test output. The fixture restores the previous
+environment after each test. Normal app SQL logging defaults to off, and the
+app's Compose configuration explicitly sets `SQL_ECHO=false`.
+
 ```sh
 docker compose --profile test run --build --rm test
+```
+
+To run only the verified $100 transfer case:
+
+```sh
+docker compose --profile test run --build --rm test python -m unittest test.test_payments.PaymentTests.test_transfer_100_dollars_from_pinecrest_to_lopez -v
 ```
 
 This builds the test runner with the optional HTTPX dependency and starts a
@@ -186,9 +267,11 @@ The happy-path test posts a $100 payment from Pinecrest to Lopez and expects:
 - Nair balance unchanged at `200000` cents.
 - One payment record for `10000` cents from firm `1` to firm `2`.
 
-The suite also covers migrations, model persistence, UUID uniqueness, and payment
-foreign keys. Tests have not been run yet. The happy-path test is expected to
-fail until payment processing replaces the endpoint's `501` placeholder.
+The suite also covers rejection of a batch whose combined amount exceeds the
+payer's balance, rollback of a payee credit performed before a denied payer
+update, migrations, model persistence, UUID uniqueness, and payment foreign
+keys. The $100 happy-path test passed in Docker on 2026-10-30; the remaining cases
+have not been run yet.
 
 For local execution, provision a PostgreSQL database named
 `taxdome_test_task_test`, then:
