@@ -1,8 +1,8 @@
 """Shared setup for a clean, seeded PostgreSQL test database."""
 
 import os
-from pathlib import Path
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from alembic import command
@@ -18,8 +18,13 @@ class DatabaseTestCase(unittest.TestCase):
             raise RuntimeError("Set TEST_DATABASE_URL or use the Compose test service")
 
         url = make_url(database_url)
-        if url.get_backend_name() != "postgresql" or url.database != "taxdome_test_task_test":
-            raise RuntimeError("Tests may reset only the taxdome_test_task_test PostgreSQL database")
+        if (
+            url.get_backend_name() != "postgresql"
+            or url.database != "taxdome_test_task_test"
+        ):
+            raise RuntimeError(
+                "Tests may reset only the taxdome_test_task_test PostgreSQL database"
+            )
 
         self.engine = create_engine(url, echo=True)
         self.addCleanup(self.engine.dispose)

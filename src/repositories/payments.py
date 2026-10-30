@@ -4,9 +4,9 @@ from itertools import pairwise
 
 from sqlalchemy import Connection, text
 
+from db.limits import MAX_AMOUNT_CENTS
 from repositories.errors import PaymentRejected
 from repositories.models import PaymentWrite
-
 
 MAX_PAYMENTS_PER_BATCH = 1_000
 
@@ -37,30 +37,41 @@ class PaymentRepository:
 
         total_cents = sum(payment.amount_cents for payment in payments)
         # A firm's INTEGER balance cannot cover a larger batch.
-        if total_cents > 2_147_483_647:
+        if total_cents > MAX_AMOUNT_CENTS:
             raise PaymentRejected(
                 "batch_amount_too_large",
                 "The batch total exceeds the maximum supported firm balance",
             )
 
-        requested_uuids = {payer_firm_uuid, *(payment.payee_firm_uuid for payment in payments)}
+        requested_uuids = {
+            payer_firm_uuid,
+            *(payment.payee_firm_uuid for payment in payments),
+        }
         ids_by_uuid = self._select_and_sort_firms(requested_uuids)
         if payer_firm_uuid not in ids_by_uuid:
             raise PaymentRejected("payer_not_found", "Payer firm was not found")
         if requested_uuids - ids_by_uuid.keys():
-            raise PaymentRejected("payee_not_found", "One or more payee firms were not found")
+            raise PaymentRejected(
+                "payee_not_found", "One or more payee firms were not found"
+            )
 
         payer_id = ids_by_uuid[payer_firm_uuid]
         deltas = self._calculate_deltas(payer_id, total_cents, payments, ids_by_uuid)
         self._update_balances(payer_id, total_cents, deltas)
 
-        self._confirm_payments(payer_id, payments, ids_by_uuid)
+        self._insert_payments(payer_id, payments, ids_by_uuid)
 
     def _select_and_sort_firms(self, uuids: set[str]) -> dict[str, int]:
-        firms = self.connection.execute(
-            text("SELECT id, uuid FROM firms WHERE uuid = ANY(:firm_uuids) ORDER BY id"),
-            {"firm_uuids": sorted(uuids)},
-        ).mappings().all()
+        firms = (
+            self.connection.execute(
+                text(
+                    "SELECT id, uuid FROM firms WHERE uuid = ANY(:firm_uuids) ORDER BY id"
+                ),
+                {"firm_uuids": sorted(uuids)},
+            )
+            .mappings()
+            .all()
+        )
         return {firm["uuid"]: firm["id"] for firm in firms}
 
     @staticmethod
@@ -115,7 +126,9 @@ class PaymentRepository:
                         {"payer_id": payer_id},
                     ).scalar_one_or_none()
                     if existing_payer_id is None:
-                        raise PaymentRejected("payer_not_found", "Payer firm was not found")
+                        raise PaymentRejected(
+                            "payer_not_found", "Payer firm was not found"
+                        )
                     raise PaymentRejected(
                         "insufficient_funds",
                         "Payer has insufficient funds for the complete batch",
@@ -125,7 +138,7 @@ class PaymentRepository:
                     f"Payee firm {firm_id} no longer exists",
                 )
 
-    def _confirm_payments(
+    def _insert_payments(
         self,
         payer_id: int,
         payments: list[PaymentWrite],

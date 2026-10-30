@@ -20,6 +20,7 @@ services:
     image: traefik:v3.7
     command:
       - --entrypoints.web.address=:80
+      - --entrypoints.web.transport.respondingtimeouts.writetimeout=15s
       - --entrypoints.traefik.address=:8080
       - --providers.file.filename=/etc/traefik/dynamic.yaml
       - --ping=true
@@ -63,6 +64,7 @@ services:
 
   db:
     image: postgres:17-bookworm
+    command: ["postgres", "-c", "transaction_timeout=13s"]
     environment:
       POSTGRES_DB: taxdome_test_task
       POSTGRES_USER: taxdome
@@ -106,6 +108,7 @@ services:
   db-test:
     profiles: [test]
     image: postgres:17-bookworm
+    command: ["postgres", "-c", "transaction_timeout=13s"]
     environment:
       POSTGRES_DB: taxdome_test_task_test
       POSTGRES_USER: taxdome_test

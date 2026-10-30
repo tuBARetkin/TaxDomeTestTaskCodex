@@ -26,8 +26,8 @@ Alembic migrations, and Docker Compose configuration.
 
 The payment endpoint is connected to a payment service and a plain-SQL repository.
 The service converts amounts and owns the transaction. The repository updates
-firm balances in ascending ID order, then inserts payment records. All 15 API
-and database tests passed against the isolated PostgreSQL database in Docker.
+firm balances in ascending ID order, then inserts payment records. All 25 automated
+tests passed in Docker, using an isolated PostgreSQL database for integration tests.
 An optional stress runner sends concurrent, opposing payment batches through
 Traefik and checks PostgreSQL's deadlock counter.
 
@@ -94,6 +94,19 @@ Each app instance has its own SQLAlchemy connection pool: 5 retained connections
 plus up to 10 temporary connections, for a maximum of 45 across the three app
 instances. Traefik has no retry middleware configured; the idempotency limitation
 below still applies.
+
+Timeouts are configured in `compose.yaml`:
+
+- PostgreSQL `transaction_timeout=13s` applies to both `db` and `db-test`.
+  It terminates sessions whose transactions exceed 13 seconds, rolling back
+  uncommitted changes. This server-wide setting also applies to migrations.
+  See [PostgreSQL transaction timeouts](https://www.postgresql.org/docs/17/runtime-config-client.html#GUC-TRANSACTION-TIMEOUT).
+- Traefik's HTTP entrypoint uses `writeTimeout=15s`, measured from the end of
+  reading request headers through writing the response. This is not an
+  application cancellation mechanism or a guarantee of a JSON timeout response.
+  See [Traefik response timeouts](https://doc.traefik.io/traefik/routing/entrypoints/).
+
+Apply these settings to an existing stack with `docker compose up -d db traefik`.
 
 Fresh five-container startup and sequential payment routing were verified on
 2026-10-30 using an isolated database volume. Nine payment requests were split
@@ -304,6 +317,20 @@ alembic upgrade head
 uvicorn api.main:app --reload
 ```
 
+## Code style
+
+Ruff checks Python code and import order and applies consistent formatting.
+Install the development tools and run the checks with:
+
+```sh
+python -m pip install -e '.[test,dev]'
+ruff check .
+ruff format --check .
+```
+
+To apply import fixes and formatting, run `ruff check --fix .` followed by
+`ruff format .`.
+
 ## Structure
 
 ```text
@@ -336,7 +363,7 @@ To run only the verified $100 transfer case:
 docker compose --profile test run --build --rm test python -m unittest test.test_payments.PaymentTests.test_transfer_100_dollars_from_pinecrest_to_lopez -v
 ```
 
-This builds the test runner with the optional HTTPX dependency and starts a
+This builds the test runner with the optional HTTPX2 dependency and starts a
 separate PostgreSQL container, `db-test`. It uses the database
 `taxdome_test_task_test`, separate credentials, and temporary in-memory storage.
 The application database and its persistent volume are not used by tests.
@@ -371,10 +398,14 @@ The three bulk tests cover:
 - 1,001 otherwise valid payments: `422 batch_too_large` with no saved payments
   or balance changes.
 
+The nine validation tests cover malformed amounts, empty batches, invalid UUIDs,
+individual and combined INTEGER boundaries, exact-balance transfers, and precise
+dollar-to-cent conversion. Rejected requests must leave database state unchanged.
+
 The four database tests cover migrations, model persistence, UUID uniqueness,
-and payment foreign keys. All 15 tests passed in Docker on 2026-10-30.
+and payment foreign keys.
 An additional unit test checks that unordered firm IDs are rejected before any
-balance update executes.
+balance update executes. All 25 tests passed in Docker on 2026-10-30.
 
 For local execution, provision a PostgreSQL database named
 `taxdome_test_task_test`, then:
@@ -393,7 +424,7 @@ docker compose --profile test rm --stop --force db-test
 
 ## Concurrent payment stress test
 
-The optional `stress` service uses the existing HTTPX test dependency. It sends
+The optional `stress` service uses the existing HTTPX2 test dependency. It sends
 concurrent batches through Traefik to the three app instances, making overlapping
 groups of firms pay each other in opposing directions. The expected outcome is
 successful payments with no deadlocks.

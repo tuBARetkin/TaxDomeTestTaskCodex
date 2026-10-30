@@ -1,7 +1,7 @@
 """FastAPI entry point."""
 
-from contextlib import asynccontextmanager
 import os
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request
 from sqlalchemy import create_engine, text

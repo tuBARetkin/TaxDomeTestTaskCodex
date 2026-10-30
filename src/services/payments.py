@@ -5,13 +5,13 @@ from decimal import Decimal, InvalidOperation
 from sqlalchemy import Engine
 
 from api.schemas import BulkPaymentRequest, PaymentItem
+from db.limits import MAX_AMOUNT_CENTS
 from db.transaction import transaction
 from repositories.errors import PaymentRejected
 from repositories.models import PaymentWrite
 from repositories.payments import PaymentRepository
 
-
-MAX_AMOUNT_DOLLARS = Decimal("21474836.47")
+MAX_AMOUNT_DOLLARS = Decimal(MAX_AMOUNT_CENTS) / 100
 
 
 class PaymentService:

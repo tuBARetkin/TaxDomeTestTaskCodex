@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
 from uuid import uuid4
 
-import httpx
+import httpx2
 from sqlalchemy import create_engine, text
 
 
@@ -75,10 +75,10 @@ def main() -> int:
             ]
 
         barrier = Barrier(args.concurrency + 1)
-        limits = httpx.Limits(
+        limits = httpx2.Limits(
             max_connections=args.concurrency, max_keepalive_connections=args.concurrency
         )
-        with httpx.Client(
+        with httpx2.Client(
             base_url=os.environ.get("STRESS_BASE_URL", "http://traefik"),
             timeout=args.timeout,
             limits=limits,
@@ -107,7 +107,7 @@ def main() -> int:
                         error = (
                             response.text[:300] if response.status_code != 201 else ""
                         )
-                    except httpx.HTTPError as exc:
+                    except httpx2.HTTPError as exc:
                         status, error = "transport_error", str(exc)
                     results.append(
                         (request_id, status, time.perf_counter() - started, error)

@@ -8,7 +8,6 @@ from sqlalchemy import text
 from api.main import app
 from test.database_case import DatabaseTestCase
 
-
 PAYER_UUID = "3f1c9a2e-7b4d-4c1e-9a55-2d8e6f0b7c41"
 LOPEZ_UUID = "8b2e4c71-0d3a-4f6e-b1c9-5a7d2e9f4c10"
 NAIR_UUID = "e5f18b3c-2a9d-4c07-8e6b-1d4a7f9c3b25"
@@ -42,10 +41,16 @@ class BulkPaymentTests(DatabaseTestCase):
         ]
         with self.engine.begin() as connection:
             connection.execute(
-                text("INSERT INTO firms (id, name, balance_cents, uuid) "
-                     "VALUES (:id, :name, 10000, :uuid)"),
+                text(
+                    "INSERT INTO firms (id, name, balance_cents, uuid) "
+                    "VALUES (:id, :name, 10000, :uuid)"
+                ),
                 [
-                    {"id": firm_id, "name": f"Recipient {firm_id}", "uuid": str(UUID(int=firm_id))}
+                    {
+                        "id": firm_id,
+                        "name": f"Recipient {firm_id}",
+                        "uuid": str(UUID(int=firm_id)),
+                    }
                     for firm_id, _, _, _ in recipients
                 ],
             )
@@ -78,7 +83,9 @@ class BulkPaymentTests(DatabaseTestCase):
                 text("SELECT id, balance_cents FROM firms ORDER BY id")
             ).all()
             stored_payments = connection.execute(
-                text("SELECT payer_firm_id, payee_firm_id, amount_cents, description FROM payments")
+                text(
+                    "SELECT payer_firm_id, payee_firm_id, amount_cents, description FROM payments"
+                )
             ).all()
 
         # The batch totals $10,750; Pinecrest starts with $50,000.
@@ -97,13 +104,21 @@ class BulkPaymentTests(DatabaseTestCase):
                 json={
                     "payer_firm_uuid": PAYER_UUID,
                     "payments": [
-                        {"amount": "100", "payee_firm_uuid": LOPEZ_UUID, "description": "Lopez payment"},
+                        {
+                            "amount": "100",
+                            "payee_firm_uuid": LOPEZ_UUID,
+                            "description": "Lopez payment",
+                        },
                         {
                             "amount": "25.50",
                             "payee_firm_uuid": "00000000-0000-0000-0000-000000000000",
                             "description": "Missing recipient",
                         },
-                        {"amount": "200", "payee_firm_uuid": NAIR_UUID, "description": "Nair payment"},
+                        {
+                            "amount": "200",
+                            "payee_firm_uuid": NAIR_UUID,
+                            "description": "Nair payment",
+                        },
                     ],
                 },
             )
@@ -114,7 +129,9 @@ class BulkPaymentTests(DatabaseTestCase):
             balances = connection.execute(
                 text("SELECT id, balance_cents FROM firms ORDER BY id")
             ).all()
-            payment_count = connection.execute(text("SELECT COUNT(*) FROM payments")).scalar_one()
+            payment_count = connection.execute(
+                text("SELECT COUNT(*) FROM payments")
+            ).scalar_one()
 
         self.assertEqual(balances, [(1, 5_000_000), (2, 50_000), (3, 200_000)])
         self.assertEqual(payment_count, 0)
@@ -122,7 +139,11 @@ class BulkPaymentTests(DatabaseTestCase):
     def test_rejects_1001_payments(self):
         # $1,001 is affordable, and every recipient exists: only the count is invalid.
         payments = [
-            {"amount": "1", "payee_firm_uuid": LOPEZ_UUID, "description": f"Payment {index + 1}"}
+            {
+                "amount": "1",
+                "payee_firm_uuid": LOPEZ_UUID,
+                "description": f"Payment {index + 1}",
+            }
             for index in range(1_001)
         ]
         with TestClient(app) as client:
@@ -137,7 +158,9 @@ class BulkPaymentTests(DatabaseTestCase):
             balances = connection.execute(
                 text("SELECT id, balance_cents FROM firms ORDER BY id")
             ).all()
-            payment_count = connection.execute(text("SELECT COUNT(*) FROM payments")).scalar_one()
+            payment_count = connection.execute(
+                text("SELECT COUNT(*) FROM payments")
+            ).scalar_one()
 
         self.assertEqual(balances, [(1, 5_000_000), (2, 50_000), (3, 200_000)])
         self.assertEqual(payment_count, 0)

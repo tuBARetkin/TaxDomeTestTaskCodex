@@ -34,8 +34,10 @@ class PaymentTests(DatabaseTestCase):
                 text("SELECT id, balance_cents FROM firms ORDER BY id")
             ).all()
             payments = connection.execute(
-                text("SELECT payer_firm_id, payee_firm_id, amount_cents, description "
-                     "FROM payments ORDER BY id")
+                text(
+                    "SELECT payer_firm_id, payee_firm_id, amount_cents, description "
+                    "FROM payments ORDER BY id"
+                )
             ).all()
 
         self.assertEqual(balances, [(1, 4_990_000), (2, 60_000), (3, 200_000)])
@@ -61,14 +63,20 @@ class PaymentTests(DatabaseTestCase):
                     )
 
                     self.assertEqual(response.status_code, 422, response.text)
-                    self.assertEqual(response.json()["detail"]["code"], "self_transfer_not_allowed")
+                    self.assertEqual(
+                        response.json()["detail"]["code"], "self_transfer_not_allowed"
+                    )
                     with self.engine.connect() as connection:
                         balances = connection.execute(
                             text("SELECT id, balance_cents FROM firms ORDER BY id")
                         ).all()
-                        payment_count = connection.execute(text("SELECT COUNT(*) FROM payments")).scalar_one()
+                        payment_count = connection.execute(
+                            text("SELECT COUNT(*) FROM payments")
+                        ).scalar_one()
 
-                    self.assertEqual(balances, [(1, 5_000_000), (2, 50_000), (3, 200_000)])
+                    self.assertEqual(
+                        balances, [(1, 5_000_000), (2, 50_000), (3, 200_000)]
+                    )
                     self.assertEqual(payment_count, 0)
 
     def test_rejects_self_transfer_before_balance_check(self):
@@ -94,7 +102,9 @@ class PaymentTests(DatabaseTestCase):
             balances = connection.execute(
                 text("SELECT id, balance_cents FROM firms ORDER BY id")
             ).all()
-            payment_count = connection.execute(text("SELECT COUNT(*) FROM payments")).scalar_one()
+            payment_count = connection.execute(
+                text("SELECT COUNT(*) FROM payments")
+            ).scalar_one()
 
         self.assertEqual(balances, [(1, 5_000_000), (2, 50_000), (3, 200_000)])
         self.assertEqual(payment_count, 0)
@@ -126,7 +136,9 @@ class PaymentTests(DatabaseTestCase):
             balances = connection.execute(
                 text("SELECT id, balance_cents FROM firms ORDER BY id")
             ).all()
-            payment_count = connection.execute(text("SELECT COUNT(*) FROM payments")).scalar_one()
+            payment_count = connection.execute(
+                text("SELECT COUNT(*) FROM payments")
+            ).scalar_one()
 
         self.assertEqual(balances, [(1, 5_000_000), (2, 50_000), (3, 200_000)])
         self.assertEqual(payment_count, 0)
@@ -158,7 +170,9 @@ class PaymentTests(DatabaseTestCase):
             balances = connection.execute(
                 text("SELECT id, balance_cents FROM firms ORDER BY id")
             ).all()
-            payment_count = connection.execute(text("SELECT COUNT(*) FROM payments")).scalar_one()
+            payment_count = connection.execute(
+                text("SELECT COUNT(*) FROM payments")
+            ).scalar_one()
 
         self.assertEqual(balances, [(1, 5_000_000), (2, 50_000), (3, 200_000)])
         self.assertEqual(payment_count, 0)
@@ -186,7 +200,9 @@ class PaymentTests(DatabaseTestCase):
             balances = connection.execute(
                 text("SELECT id, balance_cents FROM firms ORDER BY id")
             ).all()
-            payment_count = connection.execute(text("SELECT COUNT(*) FROM payments")).scalar_one()
+            payment_count = connection.execute(
+                text("SELECT COUNT(*) FROM payments")
+            ).scalar_one()
 
         self.assertEqual(balances, [(1, 5_000_000), (2, 50_000), (3, 200_000)])
         self.assertEqual(payment_count, 0)
@@ -213,7 +229,9 @@ class PaymentTests(DatabaseTestCase):
             balances = connection.execute(
                 text("SELECT id, balance_cents FROM firms ORDER BY id")
             ).all()
-            payment_count = connection.execute(text("SELECT COUNT(*) FROM payments")).scalar_one()
+            payment_count = connection.execute(
+                text("SELECT COUNT(*) FROM payments")
+            ).scalar_one()
 
         self.assertEqual(balances, [(1, 5_000_000), (2, 50_000), (3, 200_000)])
         self.assertEqual(payment_count, 0)
@@ -228,7 +246,9 @@ class PaymentTests(DatabaseTestCase):
                 connection.execute(text("DELETE FROM firms WHERE id = 2"))
             return firms
 
-        with patch.object(PaymentRepository, "_select_and_sort_firms", select_then_delete_payer):
+        with patch.object(
+            PaymentRepository, "_select_and_sort_firms", select_then_delete_payer
+        ):
             with TestClient(app) as client:
                 response = client.post(
                     "/api/v1/payments/",
@@ -250,7 +270,9 @@ class PaymentTests(DatabaseTestCase):
             balances = connection.execute(
                 text("SELECT id, balance_cents FROM firms ORDER BY id")
             ).all()
-            payment_count = connection.execute(text("SELECT COUNT(*) FROM payments")).scalar_one()
+            payment_count = connection.execute(
+                text("SELECT COUNT(*) FROM payments")
+            ).scalar_one()
 
         self.assertEqual(balances, [(1, 5_000_000), (3, 200_000)])
         self.assertEqual(payment_count, 0)

@@ -5,7 +5,6 @@ from contextlib import contextmanager
 
 from sqlalchemy import Connection, Engine
 
-
 PAYMENT_ISOLATION_LEVEL = "READ COMMITTED"
 
 

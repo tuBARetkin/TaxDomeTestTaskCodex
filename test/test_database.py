@@ -22,7 +22,9 @@ class DatabaseTests(DatabaseTestCase):
     def test_models_store_firms_and_payment(self):
         from db.models import Firm, Payment
 
-        with Session(self.connection, join_transaction_mode="create_savepoint") as session:
+        with Session(
+            self.connection, join_transaction_mode="create_savepoint"
+        ) as session:
             payer = Firm(name="Payer", balance_cents=10000, uuid=str(uuid4()))
             payee = Firm(name="Payee", balance_cents=500, uuid=str(uuid4()))
             session.add_all([payer, payee])
@@ -46,8 +48,7 @@ class DatabaseTests(DatabaseTestCase):
     def test_firm_public_identifier_is_unique(self):
         params = {"uuid": str(uuid4())}
         statement = text(
-            "INSERT INTO firms (name, balance_cents, uuid) "
-            "VALUES ('Firm', 0, :uuid)"
+            "INSERT INTO firms (name, balance_cents, uuid) VALUES ('Firm', 0, :uuid)"
         )
         self.connection.execute(statement, params)
         with self.assertRaises(IntegrityError), self.connection.begin_nested():
@@ -55,17 +56,21 @@ class DatabaseTests(DatabaseTestCase):
 
     def test_both_payment_firms_must_exist(self):
         firm_id = self.connection.execute(
-            text("INSERT INTO firms (name, balance_cents, uuid) "
-                 "VALUES ('Firm', 0, :uuid) RETURNING id"),
+            text(
+                "INSERT INTO firms (name, balance_cents, uuid) "
+                "VALUES ('Firm', 0, :uuid) RETURNING id"
+            ),
             {"uuid": str(uuid4())},
         ).scalar_one()
         for payer, payee in ((-1, firm_id), (firm_id, -1)):
             with self.subTest(payer=payer, payee=payee):
                 with self.assertRaises(IntegrityError), self.connection.begin_nested():
                     self.connection.execute(
-                        text("INSERT INTO payments "
-                             "(payer_firm_id, payee_firm_id, amount_cents, description) "
-                             "VALUES (:payer, :payee, 100, 'Test')"),
+                        text(
+                            "INSERT INTO payments "
+                            "(payer_firm_id, payee_firm_id, amount_cents, description) "
+                            "VALUES (:payer, :payee, 100, 'Test')"
+                        ),
                         {"payer": payer, "payee": payee},
                     )
 
