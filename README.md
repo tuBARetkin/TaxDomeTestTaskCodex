@@ -20,9 +20,9 @@ places. Database amounts and balances are stored as integer US cents.
 
 ## Current status
 
-This is an application draft, not a verified submission.
-It contains the layered project structure, request validation, SQLAlchemy models,
-Alembic migrations, and Docker Compose configuration.
+This submission contains the layered project structure, request validation,
+SQLAlchemy models, Alembic migrations, and Docker Compose configuration.
+Verification results and known limitations are documented below.
 
 The payment endpoint is connected to a payment service and a plain-SQL repository.
 The API validates payment input; the service maps it and owns the transaction.
@@ -164,7 +164,7 @@ It does not reset balances on later restarts. The firm ID sequence is advanced
 after insertion so new firms can receive generated IDs without colliding with
 the seed rows.
 
-## Bulk payments API (draft)
+## Bulk payments API
 
 `POST /api/v1/payments/`
 
@@ -490,3 +490,49 @@ Remove the isolated stress stack and its data afterward:
 ```sh
 docker compose -p taxdome-stress --profile stress down --volumes
 ```
+
+## How I worked and used AI
+
+I used OpenAI Codex primarily as implementation hands. I kept responsibility for
+understanding the problem, choosing the design, and deciding the tradeoffs.
+Normally I start AI-assisted work by providing the full specification or task.
+For this assignment, I deliberately worked through the problem myself and gave
+incremental instructions instead. I kept Codex's autonomy limited, directed what
+to implement, reviewed the results, and corrected the approach as we went.
+
+Codex translated my instructions into code, ran commands and tests, and handled
+Git operations. I directed decisions such as the layered structure, plain SQL,
+transaction boundaries, relative balance updates, consistent firm-ID ordering,
+batch limits, self-transfer policy, and the multi-instance test setup.
+
+I used two Codex chats:
+
+- **Create minimal Python project skeleton:** project setup, payment processing,
+  migrations, Docker configuration, tests, concurrency experiments, and checking
+  the submission against the assignment.
+- **Review TaxDome test task code:** code and test review, formatting and
+  consistency improvements, and implementing the validation changes I approved.
+
+The original user/assistant exchanges are included without rewriting or
+summarization. They include progress updates, questions, corrections, and the
+trial-and-error process. These are dated exports; subsequent chat messages are
+outside their stated export cutoff. Full Git commit history is also preserved.
+
+- [Project-development conversation](docs/ai-sessions/01-project-development.md)
+  ([JSON](docs/ai-sessions/01-project-development.json)).
+- [Code-review conversation](docs/ai-sessions/02-code-review.md)
+  ([JSON](docs/ai-sessions/02-code-review.json)).
+- [Export details and original attachments](docs/ai-sessions/README.md).
+
+## Possible improvements
+
+Future work could add request idempotency if the API contract permits it, map
+recipient-balance overflow to a controlled rejection, and limit request-body
+size before JSON parsing. These are documented limitations, not implemented
+features. The assignment's request format and INTEGER schema are preserved.
+
+## Submission answers
+
+**How much time did you spend on this task?** Less than 3h.
+
+**How proud are you of your work?** Fairly proud.

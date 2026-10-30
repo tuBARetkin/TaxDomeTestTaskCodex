@@ -1,0 +1,2 @@
+# Preserve whitespace in the original user/assistant conversation text.
+docs/ai-sessions/0*.md -whitespace
