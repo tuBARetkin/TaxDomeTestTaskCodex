@@ -71,6 +71,16 @@ use `docker-compose` in place of `docker compose`.
 
 ## Database schema
 
+The payment flow uses two model layers:
+
+- API models (`api/schemas.py`) validate the JSON request, including dollar
+  strings and UUIDs.
+- Repository models (`repositories/models.py`) carry integer cents and string
+  UUIDs for persistence.
+
+`PaymentService._to_repository_models()` maps between them. There is no separate
+service model; the controller passes the API request to the service directly.
+
 - `firms`: `id INTEGER`, `name TEXT`, `balance_cents INTEGER`, `uuid TEXT`.
 - `payments`: `id INTEGER`, `payer_firm_id INTEGER`, `payee_firm_id INTEGER`,
   `amount_cents INTEGER`, `description TEXT`.
@@ -150,8 +160,8 @@ returns `201` with an empty body. For example:
 ```json
 {
   "detail": {
-    "code": "payer_update_rejected",
-    "message": "Payer has insufficient funds or no longer exists"
+    "code": "insufficient_funds",
+    "message": "Payer has insufficient funds for the complete batch"
   }
 }
 ```
@@ -159,6 +169,11 @@ returns `201` with an empty body. For example:
 Other rejection codes include `empty_batch`, `batch_too_large`, `invalid_amount`,
 `batch_amount_too_large`, `payer_not_found`, and `payee_not_found`. Request-schema
 validation errors retain FastAPI's standard `422` response format.
+
+Insufficient balance returns `insufficient_funds`; a missing payer returns
+`payer_not_found`. Both use HTTP `422` and roll back the entire batch. If the
+payer's conditional update affects no rows, an additional existence query
+distinguishes these cases, including a payer deleted after the initial lookup.
 
 Transaction isolation is explicitly set before beginning the transaction in
 `src/db/transaction.py`; change `PAYMENT_ISOLATION_LEVEL` there. The current
@@ -169,6 +184,12 @@ involving other write paths. Concurrent-request behavior has not been tested yet
 
 ## Known limitations
 
+- **Single PostgreSQL database.** All firms and payments live in one PostgreSQL
+  database, so each transfer can update both parties and insert payment records
+  in one local transaction. Sharding firms across multiple databases and
+  cross-shard transfers are outside the scope of this test task. Whether a real
+  tax service needs sharding should be decided from measured workload and
+  scaling requirements; this implementation does not assume it is necessary.
 - **Maximum 1,000 payments per batch.** `PaymentRepository.bulk_update()` rejects
   larger batches before iterating over payments or executing SQL. The controller
   translates this denial into HTTP `422`; no payments or balance changes are
@@ -267,11 +288,12 @@ The happy-path test posts a $100 payment from Pinecrest to Lopez and expects:
 - Nair balance unchanged at `200000` cents.
 - One payment record for `10000` cents from firm `1` to firm `2`.
 
-The suite also covers rejection of a batch whose combined amount exceeds the
-payer's balance, rollback of a payee credit performed before a denied payer
-update, migrations, model persistence, UUID uniqueness, and payment foreign
-keys. The $100 happy-path test passed in Docker on 2026-10-30; the remaining cases
-have not been run yet.
+All five payment API tests passed in Docker on 2026-10-30: the $100 transfer,
+insufficient funds for the combined batch, rollback of an earlier payee credit,
+an unknown payer, and a payer deleted between lookup and update. The denial
+tests assert the specific error code and verify that no payment changes persist.
+The separate database tests cover migrations, model persistence, UUID uniqueness,
+and payment foreign keys; those tests have not been run yet.
 
 For local execution, provision a PostgreSQL database named
 `taxdome_test_task_test`, then:

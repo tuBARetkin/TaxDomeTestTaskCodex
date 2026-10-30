@@ -1,45 +1,42 @@
 """Validate and process a batch of payments atomically."""
 
-from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 
 from sqlalchemy import Engine
 
+from api.schemas import BulkPaymentRequest, PaymentItem
 from db.transaction import transaction
 from repositories.errors import PaymentRejected
-from repositories.payments import PaymentRepository, PaymentWrite
+from repositories.models import PaymentWrite
+from repositories.payments import PaymentRepository
 
 
 MAX_AMOUNT_DOLLARS = Decimal("21474836.47")
-
-
-@dataclass(frozen=True)
-class PaymentInstruction:
-    amount: str
-    payee_firm_uuid: str
-    description: str
 
 
 class PaymentService:
     def __init__(self, engine: Engine):
         self.engine = engine
 
-    def bulk_update(self, payer_firm_uuid: str, payments: list[PaymentInstruction]) -> None:
-        if not payments:
+    def bulk_update(self, request: BulkPaymentRequest) -> None:
+        if not request.payments:
             raise PaymentRejected("empty_batch", "At least one payment is required")
 
-        records: list[PaymentWrite] = [
-            {
-                "payee_firm_uuid": payment.payee_firm_uuid,
-                "amount_cents": self._amount_cents(payment.amount),
-                "description": payment.description,
-            }
-            for payment in payments
-        ]
+        records = self._to_repository_models(request.payments)
 
         with transaction(self.engine) as connection:
             repository = PaymentRepository(connection)
-            repository.bulk_update(payer_firm_uuid, records)
+            repository.bulk_update(str(request.payer_firm_uuid), records)
+
+    def _to_repository_models(self, payments: list[PaymentItem]) -> list[PaymentWrite]:
+        return [
+            PaymentWrite(
+                payee_firm_uuid=str(payment.payee_firm_uuid),
+                amount_cents=self._amount_cents(payment.amount),
+                description=payment.description,
+            )
+            for payment in payments
+        ]
 
     @staticmethod
     def _amount_cents(value: str) -> int:

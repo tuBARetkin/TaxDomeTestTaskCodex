@@ -1,19 +1,12 @@
 """Plain-SQL persistence for bulk payments."""
 
-from typing import TypedDict
-
 from sqlalchemy import Connection, text
 
 from repositories.errors import PaymentRejected
+from repositories.models import PaymentWrite
 
 
 MAX_PAYMENTS_PER_BATCH = 1_000
-
-
-class PaymentWrite(TypedDict):
-    payee_firm_uuid: str
-    amount_cents: int
-    description: str
 
 
 class PaymentRepository:
@@ -37,10 +30,10 @@ class PaymentRepository:
                 "batch_too_large",
                 f"A batch may contain at most {MAX_PAYMENTS_PER_BATCH} payments",
             )
-        if any(payment["amount_cents"] <= 0 for payment in payments):
+        if any(payment.amount_cents <= 0 for payment in payments):
             raise PaymentRejected("invalid_amount", "Payment amounts must be positive")
 
-        total_cents = sum(payment["amount_cents"] for payment in payments)
+        total_cents = sum(payment.amount_cents for payment in payments)
         # A firm's INTEGER balance cannot cover a larger batch.
         if total_cents > 2_147_483_647:
             raise PaymentRejected(
@@ -48,7 +41,7 @@ class PaymentRepository:
                 "The batch total exceeds the maximum supported firm balance",
             )
 
-        requested_uuids = {payer_firm_uuid, *(payment["payee_firm_uuid"] for payment in payments)}
+        requested_uuids = {payer_firm_uuid, *(payment.payee_firm_uuid for payment in payments)}
         ids_by_uuid = self._select_and_sort_firms(requested_uuids)
         if payer_firm_uuid not in ids_by_uuid:
             raise PaymentRejected("payer_not_found", "Payer firm was not found")
@@ -79,8 +72,8 @@ class PaymentRepository:
         deltas = {firm_id: 0 for firm_id in ids_by_uuid.values()}
         deltas[payer_id] = -total_cents
         for payment in payments:
-            payee_id = ids_by_uuid[payment["payee_firm_uuid"]]
-            deltas[payee_id] += payment["amount_cents"]
+            payee_id = ids_by_uuid[payment.payee_firm_uuid]
+            deltas[payee_id] += payment.amount_cents
         return deltas
 
     def _update_balances(
@@ -111,9 +104,16 @@ class PaymentRepository:
             ).scalar_one_or_none()
             if updated_id is None:
                 if firm_id == payer_id:
+                    # A failed conditional update can also mean the payer was deleted.
+                    existing_payer_id = self.connection.execute(
+                        text("SELECT id FROM firms WHERE id = :payer_id"),
+                        {"payer_id": payer_id},
+                    ).scalar_one_or_none()
+                    if existing_payer_id is None:
+                        raise PaymentRejected("payer_not_found", "Payer firm was not found")
                     raise PaymentRejected(
-                        "payer_update_rejected",
-                        "Payer has insufficient funds or no longer exists",
+                        "insufficient_funds",
+                        "Payer has insufficient funds for the complete batch",
                     )
                 raise PaymentRejected(
                     "payee_not_found",
@@ -129,9 +129,9 @@ class PaymentRepository:
         records = [
             {
                 "payer_firm_id": payer_id,
-                "payee_firm_id": ids_by_uuid[payment["payee_firm_uuid"]],
-                "amount_cents": payment["amount_cents"],
-                "description": payment["description"],
+                "payee_firm_id": ids_by_uuid[payment.payee_firm_uuid],
+                "amount_cents": payment.amount_cents,
+                "description": payment.description,
             }
             for payment in payments
         ]
