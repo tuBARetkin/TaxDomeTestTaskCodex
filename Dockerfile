@@ -7,7 +7,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY src/ ./src/
-RUN pip install --no-cache-dir . && useradd --create-home app
+ARG INSTALL_TEST_DEPS=false
+RUN if [ "$INSTALL_TEST_DEPS" = "true" ]; then \
+        pip install --no-cache-dir '.[test]'; \
+    else \
+        pip install --no-cache-dir .; \
+    fi && useradd --create-home app
 
 COPY alembic.ini ./
 COPY migrations/ ./migrations/

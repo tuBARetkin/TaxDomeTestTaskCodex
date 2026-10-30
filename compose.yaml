@@ -29,5 +29,33 @@ services:
       timeout: 5s
       retries: 15
 
+  test:
+    profiles: [test]
+    build:
+      context: .
+      args:
+        INSTALL_TEST_DEPS: "true"
+    environment:
+      TEST_DATABASE_URL: postgresql+psycopg://taxdome_test:taxdome_test@db-test:5432/taxdome_test_task_test
+    command: ["python", "-m", "unittest", "discover", "-s", "test", "-v"]
+    depends_on:
+      db-test:
+        condition: service_healthy
+
+  db-test:
+    profiles: [test]
+    image: postgres:17-bookworm
+    environment:
+      POSTGRES_DB: taxdome_test_task_test
+      POSTGRES_USER: taxdome_test
+      POSTGRES_PASSWORD: taxdome_test
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U taxdome_test -d taxdome_test_task_test"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+
 volumes:
   postgres_data:

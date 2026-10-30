@@ -78,6 +78,21 @@ All fields are required. IDs are generated primary keys, firm UUIDs are unique,
 and both payment firm IDs reference `firms.id`. Amounts remain integer US cents.
 Alembic also creates its `alembic_version` bookkeeping table.
 
+## Seed data
+
+Migration `0003` inserts the assignment's three firms:
+
+| ID | Name | Balance (US cents) | UUID |
+| --- | --- | ---: | --- |
+| 1 | Pinecrest CPA Group | 5000000 | `3f1c9a2e-7b4d-4c1e-9a55-2d8e6f0b7c41` |
+| 2 | Lopez Bookkeeping | 50000 | `8b2e4c71-0d3a-4f6e-b1c9-5a7d2e9f4c10` |
+| 3 | Nair Tax Services | 200000 | `e5f18b3c-2a9d-4c07-8e6b-1d4a7f9c3b25` |
+
+The seed runs once with `alembic upgrade head`, including during container startup.
+It does not reset balances on later restarts. The firm ID sequence is advanced
+after insertion so new firms can receive generated IDs without colliding with
+the seed rows.
+
 ## Bulk payments API (draft)
 
 `POST /api/v1/payments/`
@@ -150,11 +165,42 @@ pyproject.toml   Package metadata and build configuration
 ## Tests
 
 ```sh
-docker compose exec app python -m unittest discover -s test -v
+docker compose --profile test run --build --rm test
 ```
 
-Tests exercise migrations, model persistence, UUID uniqueness, and payment foreign
-keys against PostgreSQL. Each test uses a separate schema in a rolled-back
-transaction, leaving application data untouched. They can also run locally with
-`python -m unittest discover -s test -v` when `DATABASE_URL` is set; otherwise
-database tests are skipped.
+This builds the test runner with the optional HTTPX dependency and starts a
+separate PostgreSQL container, `db-test`. It uses the database
+`taxdome_test_task_test`, separate credentials, and temporary in-memory storage.
+The application database and its persistent volume are not used by tests.
+
+Before **each test**, the shared fixture recreates the test database's `public`
+schema and applies every Alembic migration, including the three default firms.
+Both the API and the test assertions use this database. The fixture requires
+`TEST_DATABASE_URL` and refuses to reset a database with any other name.
+Run the suite sequentially; concurrent runs must not share this test database.
+
+The happy-path test posts a $100 payment from Pinecrest to Lopez and expects:
+
+- HTTP `201`.
+- Pinecrest balance: `4990000` cents; Lopez balance: `60000` cents.
+- Nair balance unchanged at `200000` cents.
+- One payment record for `10000` cents from firm `1` to firm `2`.
+
+The suite also covers migrations, model persistence, UUID uniqueness, and payment
+foreign keys. Tests have not been run yet. The happy-path test is expected to
+fail until payment processing replaces the endpoint's `501` placeholder.
+
+For local execution, provision a PostgreSQL database named
+`taxdome_test_task_test`, then:
+
+```sh
+python -m pip install -e '.[test]'
+export TEST_DATABASE_URL='postgresql+psycopg://user:password@localhost:5432/taxdome_test_task_test'
+python -m unittest discover -s test -v
+```
+
+To remove only the test database container after testing:
+
+```sh
+docker compose --profile test rm --stop --force db-test
+```

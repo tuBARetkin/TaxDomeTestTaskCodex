@@ -1,33 +1,23 @@
-"""Exercise migrations and models against PostgreSQL in a rolled-back schema."""
+"""Exercise migrations and models against the dedicated test database."""
 
-import os
-from pathlib import Path
-import unittest
 from uuid import uuid4
 
 from alembic import command
-from alembic.config import Config
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import inspect, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from test.database_case import DatabaseTestCase
 
-@unittest.skipUnless(os.getenv("DATABASE_URL"), "DATABASE_URL is required")
-class DatabaseTests(unittest.TestCase):
+
+class DatabaseTests(DatabaseTestCase):
     def setUp(self):
-        self.engine = create_engine(os.environ["DATABASE_URL"])
-        self.addCleanup(self.engine.dispose)
+        super().setUp()
         self.connection = self.engine.connect()
         self.addCleanup(self.connection.close)
         transaction = self.connection.begin()
         self.addCleanup(transaction.rollback)
-        schema = f"test_{uuid4().hex}"
-        self.connection.exec_driver_sql(f'CREATE SCHEMA "{schema}"')
-        self.connection.exec_driver_sql(f'SET LOCAL search_path TO "{schema}"')
-        root = Path(__file__).resolve().parents[1]
-        self.config = Config(str(root / "alembic.ini"))
         self.config.attributes["connection"] = self.connection
-        command.upgrade(self.config, "head")
 
     def test_models_store_firms_and_payment(self):
         from db.models import Firm, Payment
