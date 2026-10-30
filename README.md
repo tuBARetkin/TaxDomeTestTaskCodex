@@ -167,8 +167,9 @@ returns `201` with an empty body. For example:
 ```
 
 Other rejection codes include `empty_batch`, `batch_too_large`, `invalid_amount`,
-`batch_amount_too_large`, `payer_not_found`, and `payee_not_found`. Request-schema
-validation errors retain FastAPI's standard `422` response format.
+`batch_amount_too_large`, `payer_not_found`, `payee_not_found`, and
+`self_transfer_not_allowed`. Request-schema validation errors retain FastAPI's
+standard `422` response format.
 
 Insufficient balance returns `insufficient_funds`; a missing payer returns
 `payer_not_found`. Both use HTTP `422` and roll back the entire batch. If the
@@ -184,6 +185,12 @@ involving other write paths. Concurrent-request behavior has not been tested yet
 
 ## Known limitations
 
+- **Self-transfers are not supported.** If any payment's payee UUID matches the
+  payer UUID, the service rejects the entire batch with HTTP `422` and code
+  `self_transfer_not_allowed`, before starting a database transaction. This
+  applies regardless of the balance or amount, including an amount equal to the
+  full balance. No payments or balance changes are saved, even when the batch
+  also contains payments to other firms.
 - **Single PostgreSQL database.** All firms and payments live in one PostgreSQL
   database, so each transfer can update both parties and insert payment records
   in one local transaction. Sharding firms across multiple databases and
@@ -288,12 +295,15 @@ The happy-path test posts a $100 payment from Pinecrest to Lopez and expects:
 - Nair balance unchanged at `200000` cents.
 - One payment record for `10000` cents from firm `1` to firm `2`.
 
-All five payment API tests passed in Docker on 2026-10-30: the $100 transfer,
-insufficient funds for the combined batch, rollback of an earlier payee credit,
-an unknown payer, and a payer deleted between lookup and update. The denial
-tests assert the specific error code and verify that no payment changes persist.
-The separate database tests cover migrations, model persistence, UUID uniqueness,
-and payment foreign keys; those tests have not been run yet.
+The eight payment API tests cover the $100 transfer, insufficient funds for the
+combined batch, rollback of an earlier payee credit, an unknown payer, a payer
+deleted between lookup and update, and rejection of self-transfers. The
+self-transfer cases cover amounts below, equal to, and above the balance, plus
+a mixed batch containing a payment to another firm. The denial tests assert the
+specific error code and verify that no payment changes persist.
+
+The four database tests cover migrations, model persistence, UUID uniqueness,
+and payment foreign keys. All 12 tests passed in Docker on 2026-10-30.
 
 For local execution, provision a PostgreSQL database named
 `taxdome_test_task_test`, then:

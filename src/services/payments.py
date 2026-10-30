@@ -21,6 +21,14 @@ class PaymentService:
     def bulk_update(self, request: BulkPaymentRequest) -> None:
         if not request.payments:
             raise PaymentRejected("empty_batch", "At least one payment is required")
+        if any(
+            payment.payee_firm_uuid == request.payer_firm_uuid
+            for payment in request.payments
+        ):
+            raise PaymentRejected(
+                "self_transfer_not_allowed",
+                "Payer and payee must be different firms",
+            )
 
         records = self._to_repository_models(request.payments)
 

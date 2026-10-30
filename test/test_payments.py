@@ -41,6 +41,96 @@ class PaymentTests(DatabaseTestCase):
         self.assertEqual(balances, [(1, 4_990_000), (2, 60_000), (3, 200_000)])
         self.assertEqual(payments, [(1, 2, 10_000, "Test payment")])
 
+    def test_rejects_self_transfer_with_sufficient_funds(self):
+        with TestClient(app) as client:
+            # Lopez has $500: reject both a smaller amount and the full balance.
+            for amount in ("100", "500"):
+                with self.subTest(amount=amount):
+                    response = client.post(
+                        "/api/v1/payments/",
+                        json={
+                            "payer_firm_uuid": "8b2e4c71-0d3a-4f6e-b1c9-5a7d2e9f4c10",
+                            "payments": [
+                                {
+                                    "amount": amount,
+                                    "payee_firm_uuid": "8b2e4c71-0d3a-4f6e-b1c9-5a7d2e9f4c10",
+                                    "description": "Self-transfer",
+                                }
+                            ],
+                        },
+                    )
+
+                    self.assertEqual(response.status_code, 422, response.text)
+                    self.assertEqual(response.json()["detail"]["code"], "self_transfer_not_allowed")
+                    with self.engine.connect() as connection:
+                        balances = connection.execute(
+                            text("SELECT id, balance_cents FROM firms ORDER BY id")
+                        ).all()
+                        payment_count = connection.execute(text("SELECT COUNT(*) FROM payments")).scalar_one()
+
+                    self.assertEqual(balances, [(1, 5_000_000), (2, 50_000), (3, 200_000)])
+                    self.assertEqual(payment_count, 0)
+
+    def test_rejects_self_transfer_before_balance_check(self):
+        # Self-transfers are forbidden even when the balance would be insufficient.
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/v1/payments/",
+                json={
+                    "payer_firm_uuid": "8b2e4c71-0d3a-4f6e-b1c9-5a7d2e9f4c10",
+                    "payments": [
+                        {
+                            "amount": "600",
+                            "payee_firm_uuid": "8b2e4c71-0d3a-4f6e-b1c9-5a7d2e9f4c10",
+                            "description": "Self-transfer with insufficient funds",
+                        }
+                    ],
+                },
+            )
+
+        self.assertEqual(response.status_code, 422, response.text)
+        self.assertEqual(response.json()["detail"]["code"], "self_transfer_not_allowed")
+        with self.engine.connect() as connection:
+            balances = connection.execute(
+                text("SELECT id, balance_cents FROM firms ORDER BY id")
+            ).all()
+            payment_count = connection.execute(text("SELECT COUNT(*) FROM payments")).scalar_one()
+
+        self.assertEqual(balances, [(1, 5_000_000), (2, 50_000), (3, 200_000)])
+        self.assertEqual(payment_count, 0)
+
+    def test_rejects_entire_batch_containing_self_transfer(self):
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/v1/payments/",
+                json={
+                    "payer_firm_uuid": "8b2e4c71-0d3a-4f6e-b1c9-5a7d2e9f4c10",
+                    "payments": [
+                        {
+                            "amount": "100",
+                            "payee_firm_uuid": "3f1c9a2e-7b4d-4c1e-9a55-2d8e6f0b7c41",
+                            "description": "Valid payment",
+                        },
+                        {
+                            "amount": "100",
+                            "payee_firm_uuid": "8b2e4c71-0d3a-4f6e-b1c9-5a7d2e9f4c10",
+                            "description": "Forbidden self-transfer",
+                        },
+                    ],
+                },
+            )
+
+        self.assertEqual(response.status_code, 422, response.text)
+        self.assertEqual(response.json()["detail"]["code"], "self_transfer_not_allowed")
+        with self.engine.connect() as connection:
+            balances = connection.execute(
+                text("SELECT id, balance_cents FROM firms ORDER BY id")
+            ).all()
+            payment_count = connection.execute(text("SELECT COUNT(*) FROM payments")).scalar_one()
+
+        self.assertEqual(balances, [(1, 5_000_000), (2, 50_000), (3, 200_000)])
+        self.assertEqual(payment_count, 0)
+
     def test_rejects_batch_when_total_exceeds_payer_balance(self):
         with TestClient(app) as client:
             response = client.post(
