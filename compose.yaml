@@ -1,20 +1,65 @@
+x-app: &app
+  build: .
+  environment:
+    DATABASE_URL: postgresql+psycopg://taxdome:taxdome@db:5432/taxdome_test_task
+    SQL_ECHO: "false"
+  expose:
+    - "8000"
+  depends_on:
+    db:
+      condition: service_healthy
+  healthcheck:
+    test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+    interval: 5s
+    timeout: 5s
+    retries: 10
+    start_period: 10s
+
 services:
-  app:
-    build: .
-    environment:
-      DATABASE_URL: postgresql+psycopg://taxdome:taxdome@db:5432/taxdome_test_task
-      SQL_ECHO: "false"
+  traefik:
+    image: traefik:v3.7
+    command:
+      - --entrypoints.web.address=:80
+      - --entrypoints.traefik.address=:8080
+      - --providers.file.filename=/etc/traefik/dynamic.yaml
+      - --ping=true
+      - --accesslog=true
+      - --accesslog.format=json
     ports:
-      - "127.0.0.1:${APP_PORT:-8000}:8000"
+      - "127.0.0.1:${APP_PORT:-8000}:80"
+    configs:
+      - source: traefik_routes
+        target: /etc/traefik/dynamic.yaml
     depends_on:
-      db:
+      app:
+        condition: service_healthy
+      app-2:
+        condition: service_healthy
+      app-3:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      test: ["CMD", "traefik", "healthcheck", "--ping"]
       interval: 5s
       timeout: 5s
       retries: 10
-      start_period: 10s
+
+  app:
+    <<: *app
+    # The Dockerfile command runs migrations before starting this instance.
+
+  app-2:
+    <<: *app
+    command: ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    depends_on:
+      app:
+        condition: service_healthy
+
+  app-3:
+    <<: *app
+    command: ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    depends_on:
+      app:
+        condition: service_healthy
 
   db:
     image: postgres:17-bookworm
@@ -29,6 +74,21 @@ services:
       interval: 2s
       timeout: 5s
       retries: 15
+
+  stress:
+    profiles: [stress]
+    build:
+      context: .
+      args:
+        INSTALL_TEST_DEPS: "true"
+    environment:
+      DATABASE_URL: postgresql+psycopg://taxdome:taxdome@db:5432/taxdome_test_task
+      STRESS_BASE_URL: http://traefik
+    entrypoint: ["python", "-m", "test.stress_payments"]
+    command: []
+    depends_on:
+      traefik:
+        condition: service_healthy
 
   test:
     profiles: [test]
@@ -57,6 +117,32 @@ services:
       interval: 2s
       timeout: 5s
       retries: 15
+
+configs:
+  traefik_routes:
+    content: |
+      http:
+        routers:
+          payments:
+            entryPoints:
+              - web
+            rule: PathPrefix(`/`)
+            service: payments
+        services:
+          payments:
+            loadBalancer:
+              strategy: wrr
+              servers:
+                - url: http://app:8000
+                  weight: 1
+                - url: http://app-2:8000
+                  weight: 1
+                - url: http://app-3:8000
+                  weight: 1
+              healthCheck:
+                path: /health
+                interval: 5s
+                timeout: 3s
 
 volumes:
   postgres_data:

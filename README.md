@@ -26,33 +26,78 @@ Alembic migrations, and Docker Compose configuration.
 
 The payment endpoint is connected to a payment service and a plain-SQL repository.
 The service converts amounts and owns the transaction. The repository updates
-firm balances in ascending ID order, then inserts payment records. The $100
-Pinecrest-to-Lopez API test passes against the isolated PostgreSQL database in
-Docker. The remaining tests and concurrency checks are still deferred.
+firm balances in ascending ID order, then inserts payment records. All 15 API
+and database tests passed against the isolated PostgreSQL database in Docker.
+An optional stress runner sends concurrent, opposing payment batches through
+Traefik and checks PostgreSQL's deadlock counter.
 
 ## Stack
 
-Python 3.13, FastAPI, Uvicorn, SQLAlchemy, Alembic, Psycopg 3, and PostgreSQL 17.
+Python 3.13, FastAPI, Uvicorn, SQLAlchemy, Alembic, Psycopg 3, PostgreSQL 17,
+and Traefik 3.7.
 Setuptools is the build dependency; tests use Python's built-in `unittest`.
 
 ## Run with Docker
 
-Requires Docker with Docker Compose (included in Docker Desktop).
+Requires Docker with Docker Compose 2.23.1 or newer (included in Docker Desktop).
+This version supports [inline configs](https://docs.docker.com/reference/compose-file/configs/),
+used to embed Traefik's routing configuration in `compose.yaml`.
 
 ```sh
 docker compose up --build
 ```
 
-This starts PostgreSQL 17, waits until it is ready, applies Alembic migrations,
-and starts the FastAPI app. No local Python, PostgreSQL, or configuration files
-are required. The first run downloads images and Python packages.
+The default stack has exactly five containers, all configured in `compose.yaml`:
+
+| Service | Role |
+| --- | --- |
+| `traefik` | HTTP load balancer, exposed on `localhost:8000` |
+| `app` | First FastAPI instance; applies migrations before starting |
+| `app-2` | Second FastAPI instance |
+| `app-3` | Third FastAPI instance |
+| `db` | One PostgreSQL 17 database shared by all three instances |
+
+Startup waits for PostgreSQL, then starts `app` and applies Alembic migrations.
+Once `app` is healthy, `app-2` and `app-3` start Uvicorn directly. This prevents
+the three instances from running migrations concurrently on a fresh database.
+Traefik starts after all three instances are healthy and distributes requests
+using round robin (`strategy: wrr`, equal weight `1` for each instance). Its
+backend health checks use `/health` to exclude unhealthy instances.
+
+No local Python, PostgreSQL, or extra configuration files are required. The first
+run downloads images and Python packages. The optional `test` profile retains
+the separate test runner and test database. An optional `stress` profile adds a
+load-generator container. These services are outside the five-container default
+stack.
 
 - API docs: http://localhost:8000/docs
 - Database health check: http://localhost:8000/health
 
-The app provides a database health endpoint and a draft bulk payments endpoint.
+Both URLs go through Traefik; the app instances have no published host ports.
 To use a different host port, run
 `APP_PORT=8001 docker compose up --build`.
+
+View the five services with `docker compose ps`. Traefik's JSON access logs include
+the selected backend in `ServiceURL`:
+
+```sh
+docker compose logs -f traefik
+```
+
+After changing the inline routing configuration, recreate Traefik to load it:
+
+```sh
+docker compose up -d --no-deps --force-recreate traefik
+```
+
+Each app instance has its own SQLAlchemy connection pool: 5 retained connections
+plus up to 10 temporary connections, for a maximum of 45 across the three app
+instances. Traefik has no retry middleware configured; the idempotency limitation
+below still applies.
+
+Fresh five-container startup and sequential payment routing were verified on
+2026-10-30 using an isolated database volume. Nine payment requests were split
+three per app instance, and the shared database balances and records were checked.
 
 The database uses the local review credentials `taxdome` / `taxdome` and database
 `taxdome_test_task`. Its port is only accessible within the Compose network.
@@ -181,10 +226,23 @@ Transaction isolation is explicitly set before beginning the transaction in
 setting is `READ COMMITTED`. There is no `SELECT FOR UPDATE`; the ordered updates
 take PostgreSQL's normal row locks. The ordering avoids reverse-order locking
 between batches following this path, but is not a guarantee against deadlocks
-involving other write paths. Concurrent-request behavior has not been tested yet.
+involving other write paths. The stress runner below exercises concurrent requests;
+a successful run cannot prove that every possible schedule is deadlock-free.
+
+Before updating any balance, the repository checks that the delta dictionary's
+firm IDs are in ascending order. An ordering bug raises `ValueError` before any
+balance update executes, causing the transaction to roll back.
 
 ## Known limitations
 
+- **No request idempotency.** The assignment's JSON request format is preserved
+  and contains no client-supplied request or payment identifier. The endpoint
+  implements no idempotency key or retry deduplication. If a batch commits but
+  its HTTP response is delayed or lost, retrying the same payload can create
+  duplicate payments and debit/credit the balances again if validation still
+  passes. A client timeout does not imply that the original transaction rolled
+  back. Database-generated payment IDs cannot identify a retried request, and
+  identical payloads may also represent legitimate separate payments.
 - **Self-transfers are not supported.** If any payment's payee UUID matches the
   payer UUID, the service rejects the entire batch with HTTP `422` and code
   `self_transfer_not_allowed`, before starting a database transaction. This
@@ -226,7 +284,8 @@ involving other write paths. Concurrent-request behavior has not been tested yet
 
 ## Migrations
 
-Migrations run automatically when the app container starts. To apply them manually:
+Migrations run automatically when the `app` container starts. The other two app
+instances skip migrations. To apply migrations manually:
 
 ```sh
 docker compose exec app alembic upgrade head
@@ -255,7 +314,7 @@ src/
   db/            SQLAlchemy models and database infrastructure
 test/            Database integration tests
 migrations/      Alembic database migrations
-compose.yaml     App and PostgreSQL containers
+compose.yaml     Traefik, three app instances, PostgreSQL, and optional test services
 pyproject.toml   Package metadata and build configuration
 ```
 
@@ -314,6 +373,8 @@ The three bulk tests cover:
 
 The four database tests cover migrations, model persistence, UUID uniqueness,
 and payment foreign keys. All 15 tests passed in Docker on 2026-10-30.
+An additional unit test checks that unordered firm IDs are rejected before any
+balance update executes.
 
 For local execution, provision a PostgreSQL database named
 `taxdome_test_task_test`, then:
@@ -328,4 +389,62 @@ To remove only the test database container after testing:
 
 ```sh
 docker compose --profile test rm --stop --force db-test
+```
+
+## Concurrent payment stress test
+
+The optional `stress` service uses the existing HTTPX test dependency. It sends
+concurrent batches through Traefik to the three app instances, making overlapping
+groups of firms pay each other in opposing directions. The expected outcome is
+successful payments with no deadlocks.
+
+Use a separate Compose project to keep the review database independent:
+
+```sh
+APP_PORT=8001 docker compose -p taxdome-stress up --build -d --wait
+APP_PORT=8001 docker compose -p taxdome-stress --profile stress run --build --rm stress
+```
+
+Defaults: 1,000 requests, 24 concurrent clients, 8 firms, 3 payments per request,
+and a 60-second HTTP client timeout. To change the workload:
+
+```sh
+APP_PORT=8001 docker compose -p taxdome-stress --profile stress run --build --rm stress --requests 2000 --concurrency 24 --firms 8 --batch-size 7
+```
+
+Each run creates its own funded firms with unique UUIDs and one-cent payments.
+It leaves the seeded firms untouched and retains its rows for inspection under
+the reported `run_id`. The runner does not retry failed requests.
+
+The JSON report includes requests per second, p50/p95/p99 latency, HTTP statuses,
+the increase in `pg_stat_database.deadlocks`, and checks of balances and payment
+counts against successful responses. Exit code `0` means all requests returned
+`201`, no new database deadlocks were reported, and the database checks matched;
+otherwise it exits with `1`. HTTP errors alone are not classified as deadlocks.
+A client timeout can leave an in-flight transaction, so a failed run's final
+database state may still change afterward. Run without other traffic when using
+the database-wide deadlock counter.
+
+Verified locally on 2026-10-30 with the default workload above:
+
+| Repository SQL | HTTP `201` responses | New PostgreSQL deadlocks | Runner exit code |
+| --- | ---: | ---: | ---: |
+| Original `ORDER BY id` | 1,000 / 1,000 | 0 | 0 |
+| Only `ORDER BY id` temporarily removed | 545 / 1,000 | 317 | 1 |
+| `ORDER BY id` restored | 1,000 / 1,000 | 0 | 0 |
+
+All three app instances were rebuilt for each SQL change. The unsorted run also
+returned `500` and `502` responses and had client timeouts; the deadlock count
+came from PostgreSQL itself. Both ordered runs matched all expected balances and
+3,000 payment records. The temporary SQL change was reverted. This demonstrates
+that the workload detects the ordering regression, without guaranteeing that
+every possible concurrent workload is deadlock-free.
+
+These three runs preceded the addition of the ordering guard. With the guard,
+unordered firm IDs are rejected before balance updates can acquire row locks.
+
+Remove the isolated stress stack and its data afterward:
+
+```sh
+docker compose -p taxdome-stress --profile stress down --volumes
 ```

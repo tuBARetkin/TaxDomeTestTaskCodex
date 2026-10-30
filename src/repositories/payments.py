@@ -1,5 +1,7 @@
 """Plain-SQL persistence for bulk payments."""
 
+from itertools import pairwise
+
 from sqlalchemy import Connection, text
 
 from repositories.errors import PaymentRejected
@@ -82,6 +84,9 @@ class PaymentRepository:
         total_cents: int,
         deltas: dict[int, int],
     ) -> None:
+        if any(previous > current for previous, current in pairwise(deltas)):
+            raise ValueError("Balance updates require firm IDs in ascending order")
+
         update_firm = text(
             """
             UPDATE firms
