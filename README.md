@@ -295,15 +295,25 @@ The happy-path test posts a $100 payment from Pinecrest to Lopez and expects:
 - Nair balance unchanged at `200000` cents.
 - One payment record for `10000` cents from firm `1` to firm `2`.
 
-The eight payment API tests cover the $100 transfer, insufficient funds for the
+The eleven payment API tests cover the $100 transfer, insufficient funds for the
 combined batch, rollback of an earlier payee credit, an unknown payer, a payer
-deleted between lookup and update, and rejection of self-transfers. The
-self-transfer cases cover amounts below, equal to, and above the balance, plus
+deleted between lookup and update, rejection of self-transfers, and bulk batches.
+The self-transfer cases cover amounts below, equal to, and above the balance, plus
 a mixed batch containing a payment to another firm. The denial tests assert the
 specific error code and verify that no payment changes persist.
 
+The three bulk tests cover:
+
+- Exactly 1,000 payments to 20 firms, including repeated recipients, different
+  amounts with cents, and mixed request order. Expected balances and all stored
+  payment details are checked; unrelated firms must remain unchanged.
+- A batch with valid recipients and one missing recipient: `422 payee_not_found`
+  with no saved payments or balance changes.
+- 1,001 otherwise valid payments: `422 batch_too_large` with no saved payments
+  or balance changes.
+
 The four database tests cover migrations, model persistence, UUID uniqueness,
-and payment foreign keys. All 12 tests passed in Docker on 2026-10-30.
+and payment foreign keys. All 15 tests passed in Docker on 2026-10-30.
 
 For local execution, provision a PostgreSQL database named
 `taxdome_test_task_test`, then:
