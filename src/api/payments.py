@@ -3,7 +3,8 @@
 from fastapi import APIRouter, HTTPException, Request, Response, status
 
 from api.schemas import BulkPaymentRequest
-from services.payments import PaymentRejected, PaymentService
+from repositories.errors import PaymentRejected
+from services.payments import PaymentService
 
 router = APIRouter(prefix="/api/v1", tags=["payments"])
 

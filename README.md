@@ -25,9 +25,10 @@ It contains the layered project structure, request validation, SQLAlchemy models
 Alembic migrations, and Docker Compose configuration.
 
 The payment endpoint is connected to a payment service and a plain-SQL repository.
-The service converts amounts and owns the transaction. The repository updates
-firm balances in ascending ID order, then inserts payment records. All 25 automated
-tests passed in Docker, using an isolated PostgreSQL database for integration tests.
+The API validates payment input; the service maps it and owns the transaction.
+The repository updates firm balances in ascending ID order, then inserts payment
+records. All 28 automated tests passed in Docker, using an isolated PostgreSQL
+database for integration tests.
 An optional stress runner sends concurrent, opposing payment batches through
 Traefik and checks PostgreSQL's deadlock counter.
 
@@ -132,7 +133,8 @@ use `docker-compose` in place of `docker compose`.
 The payment flow uses two model layers:
 
 - API models (`api/schemas.py`) validate the JSON request, including dollar
-  strings and UUIDs.
+  strings, UUIDs, amount limits, batch size and total, and self-transfers.
+  Each validated payment exposes its amount as integer cents.
 - Repository models (`repositories/models.py`) carry integer cents and string
   UUIDs for persistence.
 
@@ -187,12 +189,18 @@ the seed rows.
 Request validation:
 
 - `payer_firm_uuid` and each `payee_firm_uuid` must be valid UUIDs.
-- `payments` must contain at least one entry.
+- `payments` must contain between 1 and 1,000 entries.
 - `amount` must be a positive string with zero, one, or two decimal places.
+- Each amount and the batch total must fit within `2147483647` cents.
+- Each payee must be different from the payer.
 - Each payment requires a string `description`.
 
-The service converts dollar strings to integer cents without floating-point
-arithmetic. Invalid input or an amount exceeding the INTEGER range returns `422`.
+The API checks batch size before validating individual payment entries. All
+input-only checks finish before the payment service is called or a database
+connection is acquired. Dollar strings are converted to integer cents without
+floating-point arithmetic. Invalid input returns `422` with the existing error
+codes or FastAPI's standard field-validation error format. When a request breaks
+multiple rules, the earlier validation stage determines the response.
 `PaymentRepository.bulk_update()` in `src/repositories/payments.py` receives the
 payer UUID, payment entries with integer cents, and an open SQLAlchemy Core
 connection. All statements use that connection and bound parameters.
@@ -256,11 +264,11 @@ balance update executes, causing the transaction to roll back.
   passes. A client timeout does not imply that the original transaction rolled
   back. Database-generated payment IDs cannot identify a retried request, and
   identical payloads may also represent legitimate separate payments.
-- **Self-transfers are not supported.** If any payment's payee UUID matches the
-  payer UUID, the service rejects the entire batch with HTTP `422` and code
-  `self_transfer_not_allowed`, before starting a database transaction. This
-  applies regardless of the balance or amount, including an amount equal to the
-  full balance. No payments or balance changes are saved, even when the batch
+- **Self-transfers are not supported.** For otherwise valid input, if any
+  payment's payee UUID matches the payer UUID, API validation rejects the entire
+  batch with HTTP `422` and code `self_transfer_not_allowed` before calling the
+  service. This applies whether the amount is below, equal to, or above the
+  payer's balance. No payments or balance changes are saved, even when the batch
   also contains payments to other firms.
 - **Single PostgreSQL database.** All firms and payments live in one PostgreSQL
   database, so each transfer can update both parties and insert payment records
@@ -268,25 +276,25 @@ balance update executes, causing the transaction to roll back.
   cross-shard transfers are outside the scope of this test task. Whether a real
   tax service needs sharding should be decided from measured workload and
   scaling requirements; this implementation does not assume it is necessary.
-- **Maximum 1,000 payments per batch.** `PaymentRepository.bulk_update()` rejects
-  larger batches before iterating over payments or executing SQL. The controller
-  translates this denial into HTTP `422`; no payments or balance changes are
-  saved. The limit is defined by `MAX_PAYMENTS_PER_BATCH` in
-  `src/repositories/payments.py`.
+- **Maximum 1,000 payments per batch.** API validation rejects larger batches
+  before validating or converting their entries, returning HTTP `422` with code
+  `batch_too_large`. No payments or balance changes are saved. The limit is
+  defined by `MAX_PAYMENTS_PER_BATCH` in `src/api/schemas.py`.
 - **In-memory processing.** The request, service inputs, and insert records are
   held in memory. Aggregation visits every payment, and records are sorted before
   insertion. This implementation is intended for bounded batches, not millions
-  of payments in one request. The repository limit does not limit HTTP body
-  bytes or prevent earlier JSON parsing and service-side allocations; a request
-  body size limit and streamed ingestion are not implemented.
+  of payments in one request. The API batch limit does not limit HTTP body bytes
+  or prevent JSON parsing before schema validation; a request body size limit
+  and streamed ingestion are not implemented.
 - **32-bit INTEGER columns.** IDs, balances, and payment amounts use PostgreSQL
   `INTEGER`, whose range is `-2147483648` to `2147483647`. For money stored in
   cents, the maximum positive value is **$21,474,836.47**. Individual payments
   above this amount are rejected with `422`.
 - **Batch totals.** Each payment can fit within INTEGER while their sum exceeds
-  its maximum. Python's integer sum does not overflow, but the repository
-  explicitly rejects totals above `2147483647` cents with `422`: a single firm's
-  INTEGER balance cannot cover a larger batch.
+  its maximum. Python's integer sum does not overflow, but API validation rejects
+  totals above `2147483647` cents with `422` and code `batch_amount_too_large`
+  before calling the service: a single firm's INTEGER balance cannot cover a
+  larger batch.
 - **Crediting a balance can overflow.** An individually valid payment and batch
   total do not guarantee that the recipient's existing balance plus its total
   credits fits INTEGER. For example, adding one cent to a balance of
@@ -336,7 +344,7 @@ To apply import fixes and formatting, run `ruff check --fix .` followed by
 ```text
 src/
   api/           FastAPI entry point, routes, and request schemas
-  services/      Payment validation and transaction orchestration
+  services/      Mapping validated payments and transaction orchestration
   repositories/  Ordered balance updates and payment inserts in plain SQL
   db/            SQLAlchemy models and database infrastructure
 test/            Database integration tests
@@ -405,7 +413,10 @@ dollar-to-cent conversion. Rejected requests must leave database state unchanged
 The four database tests cover migrations, model persistence, UUID uniqueness,
 and payment foreign keys.
 An additional unit test checks that unordered firm IDs are rejected before any
-balance update executes. All 25 tests passed in Docker on 2026-10-30.
+balance update executes. Three API tests verify that input-only rejections happen
+before the service is called, that batch size is checked before individual items,
+and that malformed fields retain FastAPI's standard error format. These tests
+need no running database. All 28 tests passed in Docker on 2026-10-30.
 
 For local execution, provision a PostgreSQL database named
 `taxdome_test_task_test`, then:

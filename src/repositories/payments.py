@@ -4,11 +4,8 @@ from itertools import pairwise
 
 from sqlalchemy import Connection, text
 
-from db.limits import MAX_AMOUNT_CENTS
 from repositories.errors import PaymentRejected
 from repositories.models import PaymentWrite
-
-MAX_PAYMENTS_PER_BATCH = 1_000
 
 
 class PaymentRepository:
@@ -27,22 +24,10 @@ class PaymentRepository:
         """
         if not payments:
             raise PaymentRejected("empty_batch", "At least one payment is required")
-        if len(payments) > MAX_PAYMENTS_PER_BATCH:
-            raise PaymentRejected(
-                "batch_too_large",
-                f"A batch may contain at most {MAX_PAYMENTS_PER_BATCH} payments",
-            )
         if any(payment.amount_cents <= 0 for payment in payments):
             raise PaymentRejected("invalid_amount", "Payment amounts must be positive")
 
         total_cents = sum(payment.amount_cents for payment in payments)
-        # A firm's INTEGER balance cannot cover a larger batch.
-        if total_cents > MAX_AMOUNT_CENTS:
-            raise PaymentRejected(
-                "batch_amount_too_large",
-                "The batch total exceeds the maximum supported firm balance",
-            )
-
         requested_uuids = {
             payer_firm_uuid,
             *(payment.payee_firm_uuid for payment in payments),
